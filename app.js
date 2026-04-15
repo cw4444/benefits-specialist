@@ -38,6 +38,13 @@ const els = {
   rScore: document.querySelector("#score-renewal"),
   vScore: document.querySelector("#score-vendor"),
   cScore: document.querySelector("#score-compliance"),
+  exportReport: document.querySelector("#export-report"),
+  copyReport: document.querySelector("#copy-report"),
+  shareReport: document.querySelector("#share-report"),
+  reportMeta: document.querySelector("#report-meta"),
+  modeLabel: document.querySelector("#mode-label"),
+  executiveSummary: document.querySelector("#executive-summary"),
+  nextStepsList: document.querySelector("#next-steps-list"),
 };
 
 const storageKeys = {
@@ -145,12 +152,186 @@ function render(results) {
   els.vendor.textContent = results.vendorText;
   els.compliance.textContent = results.complianceText;
   els.scale.textContent = results.scaleText;
+  els.reportMeta.textContent = `${els.provider.value === "local" ? "Local analysis" : `${els.provider.value} proxy` } · ${new Date().toLocaleString()}`;
+  els.modeLabel.textContent = els.provider.value === "local" || !els.apiKey.value.trim() ? "Local demo" : `${els.provider.value} proxy`;
+  els.executiveSummary.textContent = results.executiveSummary || buildExecutiveSummary(results);
+  els.nextStepsList.innerHTML = (results.nextSteps || buildNextSteps(results))
+    .map((step) => `<li>${escapeHtml(step)}</li>`)
+    .join("");
 }
 
 function runAnalysis() {
   saveState();
-  els.statusPill.textContent = els.provider.value === "local" ? "Local mode" : "Ready for API";
-  render(analyze(els.input.value.trim()));
+  const input = els.input.value.trim();
+  if (els.provider.value === "local" || !els.apiKey.value.trim()) {
+    els.statusPill.textContent = "Local mode";
+    render(enrichResults(analyze(input)));
+    return;
+  }
+
+  els.statusPill.textContent = "Calling proxy...";
+  fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider: els.provider.value,
+      apiKey: els.apiKey.value.trim(),
+      model: els.modelName.value.trim(),
+      input,
+    }),
+  })
+    .then((response) => response.json())
+    .then((payload) => {
+      const raw = payload.raw || {};
+      const text = extractProxyText(payload.provider, raw);
+      if (text) {
+        render(enrichResults(text));
+        els.statusPill.textContent = "Proxy run complete";
+        return;
+      }
+      els.statusPill.textContent = "Proxy fallback";
+      render(enrichResults(analyze(input)));
+    })
+    .catch(() => {
+      els.statusPill.textContent = "Local fallback";
+      render(enrichResults(analyze(input)));
+    });
+}
+
+function extractProxyText(provider, raw) {
+  const read = (value) => (typeof value === "string" ? value : "");
+  if (provider === "openai") {
+    const text = raw.output_text || raw.output?.[0]?.content?.[0]?.text;
+    return text ? parseStructuredText(text) : null;
+  }
+  if (provider === "anthropic") {
+    const text = raw.content?.[0]?.text;
+    return text ? parseStructuredText(text) : null;
+  }
+  if (provider === "google") {
+    const text = raw.candidates?.[0]?.content?.parts?.[0]?.text;
+    return text ? parseStructuredText(text) : null;
+  }
+  if (provider === "xai") {
+    const text = raw.choices?.[0]?.message?.content;
+    return text ? parseStructuredText(text) : null;
+  }
+  return read(raw);
+}
+
+function enrichResults(results) {
+  return {
+    ...results,
+    executiveSummary: results.executiveSummary || buildExecutiveSummary(results),
+    nextSteps: results.nextSteps || buildNextSteps(results),
+  };
+}
+
+function buildExecutiveSummary(results) {
+  return [
+    `Renewal risk sits at ${results.renewalScore}%, with the most obvious pressure coming from timing, approvals, and vendor leverage.`,
+    `Vendor audit coverage sits at ${results.vendorScore}%, so the workflow should focus on contracts, SLAs, and data ownership.`,
+    `Compliance coverage sits at ${results.complianceScore}%, which is enough for a plain-English country summary but still needs a human sanity check.`,
+  ].join(" ");
+}
+
+function buildNextSteps(results) {
+  const steps = [
+    "Confirm renewal dates, decision owners, and escalation routes for each country or vendor.",
+    "Review vendor contracts, broker arrangements, SLAs, and billing ownership in one pass.",
+    "Map statutory and EOR requirements into a country-level checklist that a non-technical user can follow.",
+  ];
+  if (results.scaleScore >= 60) {
+    steps.unshift("Reuse one template for each country so the process scales without rework.");
+  }
+  return steps;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function parseStructuredText(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return {
+      renewalScore: Number(parsed.renewalScore) || 0,
+      vendorScore: Number(parsed.vendorScore) || 0,
+      complianceScore: Number(parsed.complianceScore) || 0,
+      renewalText: parsed.renewal || parsed.renewalText || "",
+      vendorText: parsed.vendor || parsed.vendorText || "",
+      complianceText: parsed.compliance || parsed.complianceText || "",
+      scaleText: parsed.scaleability || parsed.scaleText || "",
+      executiveSummary: parsed.executiveSummary || "",
+      nextSteps: Array.isArray(parsed.nextSteps) ? parsed.nextSteps : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function exportReport() {
+  const results = enrichResults(analyze(els.input.value.trim()));
+  const report = toTextReport(results);
+
+  const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "benefits-specialist-report.txt";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function copyReport() {
+  const results = enrichResults(analyze(els.input.value.trim()));
+  const report = toTextReport(results);
+  await navigator.clipboard.writeText(report);
+  els.statusPill.textContent = "Summary copied";
+}
+
+function shareReport() {
+  const results = enrichResults(analyze(els.input.value.trim()));
+  const text = toTextReport(results);
+  if (navigator.share) {
+    navigator.share({
+      title: "Benefits Specialist Executive Summary",
+      text,
+    });
+    els.statusPill.textContent = "Share sheet opened";
+    return;
+  }
+  navigator.clipboard.writeText(text).then(() => {
+    els.statusPill.textContent = "Share text copied";
+  });
+}
+
+function toTextReport(results) {
+  return `Benefits Specialist Executive Report
+
+Executive summary
+${results.executiveSummary}
+
+Renewal logic
+${results.renewalText}
+
+Vendor audit
+${results.vendorText}
+
+Statutory summary
+${results.complianceText}
+
+Scaleability logic
+${results.scaleText}
+
+Next steps
+${results.nextSteps.map((step, index) => `${index + 1}. ${step}`).join("\n")}
+`;
 }
 
 els.sample.addEventListener("click", () => {
@@ -160,6 +341,15 @@ els.sample.addEventListener("click", () => {
 });
 
 els.run.addEventListener("click", runAnalysis);
+els.exportReport.addEventListener("click", exportReport);
+els.copyReport.addEventListener("click", () => {
+  copyReport().catch(() => {
+    els.statusPill.textContent = "Copy unavailable";
+  });
+});
+els.shareReport.addEventListener("click", () => {
+  shareReport();
+});
 
 els.fileInput.addEventListener("change", async () => {
   const file = els.fileInput.files?.[0];
@@ -177,4 +367,3 @@ els.fileInput.addEventListener("change", async () => {
 
 loadState();
 render(analyze(els.input.value.trim()));
-

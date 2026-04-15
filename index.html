@@ -18,17 +18,28 @@
   </head>
   <body>
     <div class="backdrop"></div>
+    <header class="topbar">
+      <div>
+        <span class="brand-mark">BS</span>
+        <span class="brand-name">Benefits Specialist</span>
+      </div>
+      <div class="topbar-note">agentic benefits demo</div>
+    </header>
     <main class="shell">
       <section class="hero">
         <div class="hero-copy">
           <p class="eyebrow">Agentic AI demo</p>
-          <h1>Benefits renewal, vendor audit, and compliance in one pass.</h1>
+          <h1>Benefits intelligence, dressed up as a very serious memo.</h1>
           <p class="lede">
             Paste a benefits brief or upload a file and get a clear, non-technical summary of
-            renewal risks, vendor issues, statutory coverage, and scaleability signals.
+            renewal risks, vendor issues, statutory coverage, and scaleability signals. Then hand
+            it to the Chairmain with a straight face.
           </p>
           <div class="cta-row">
             <button id="run-demo" class="primary">Run demo analysis</button>
+            <button id="export-report" class="secondary">Export report</button>
+            <button id="copy-report" class="secondary">Copy summary</button>
+            <button id="share-report" class="secondary">Share text</button>
             <button id="load-sample" class="secondary">Load sample brief</button>
           </div>
         </div>
@@ -49,6 +60,16 @@
             <div>
               <strong id="score-compliance">--</strong>
               <span>Compliance coverage</span>
+            </div>
+          </div>
+          <div class="summary-strip">
+            <div>
+              <span>Primary mode</span>
+              <strong id="mode-label">Local demo</strong>
+            </div>
+            <div>
+              <span>Output style</span>
+              <strong>Executive brief</strong>
             </div>
           </div>
           <div class="summary-card">
@@ -91,6 +112,7 @@
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="google">Google</option>
+                <option value="xai">xAI</option>
               </select>
             </label>
             <label>
@@ -105,6 +127,9 @@
           <div class="note">
             This demo runs locally by default. If you wire in a provider later, the key field is ready.
           </div>
+          <div class="note quiet">
+            Proxy mode posts your prompt to a tiny local server, so the browser never talks to a model API directly.
+          </div>
         </div>
       </section>
 
@@ -112,6 +137,13 @@
         <div class="section-head">
           <h2>Analysis</h2>
           <p>Useful for a human reviewer who wants a first-pass answer without digging through the full brief.</p>
+        </div>
+        <div class="report-banner">
+          <div>
+            <span class="report-label">Executive-ready</span>
+            <h3>One-page summary for leadership review</h3>
+          </div>
+          <p id="report-meta">Local analysis only</p>
         </div>
         <div class="results-grid">
           <article>
@@ -131,6 +163,14 @@
             <p id="scale-text"></p>
           </article>
         </div>
+        <article class="executive-note">
+          <h3>Executive summary</h3>
+          <p id="executive-summary"></p>
+        </article>
+        <article class="next-steps">
+          <h3>Next steps</h3>
+          <ol id="next-steps-list"></ol>
+        </article>
       </section>
     </main>
 
