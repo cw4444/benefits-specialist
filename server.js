@@ -40,6 +40,49 @@ Brief:
 ${input}`;
 }
 
+function normalizeStructuredText(text) {
+  if (!text || typeof text !== "string") return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function normalizeResponse(provider, raw) {
+  let candidateText = "";
+  if (provider === "openai") candidateText = raw.output_text || raw.output?.[0]?.content?.[0]?.text || "";
+  else if (provider === "anthropic") candidateText = raw.content?.[0]?.text || "";
+  else if (provider === "google") candidateText = raw.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  else if (provider === "xai") candidateText = raw.choices?.[0]?.message?.content || "";
+
+  const parsed = normalizeStructuredText(candidateText);
+  if (parsed) {
+    return {
+      provider,
+      title: parsed.title || "Benefits Brief",
+      renewal: parsed.renewal || "",
+      vendor: parsed.vendor || "",
+      compliance: parsed.compliance || "",
+      scaleability: parsed.scaleability || parsed.scaleText || "",
+      renewalScore: Number(parsed.renewalScore) || 0,
+      vendorScore: Number(parsed.vendorScore) || 0,
+      complianceScore: Number(parsed.complianceScore) || 0,
+      executiveSummary: parsed.executiveSummary || "",
+      nextSteps: Array.isArray(parsed.nextSteps) ? parsed.nextSteps : [],
+      raw,
+    };
+  }
+
+  return { provider, raw, title: "Benefits Brief" };
+}
+
 async function callOpenAI(apiKey, model, input) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -147,7 +190,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      json(res, 200, { provider, raw });
+      json(res, 200, { provider, normalized: normalizeResponse(provider, raw) });
     } catch (error) {
       json(res, 500, { error: error.message });
     }

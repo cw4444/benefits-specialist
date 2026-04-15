@@ -41,6 +41,8 @@ const els = {
   exportReport: document.querySelector("#export-report"),
   copyReport: document.querySelector("#copy-report"),
   shareReport: document.querySelector("#share-report"),
+  modeClient: document.querySelector("#mode-client"),
+  modeInternal: document.querySelector("#mode-internal"),
   reportMeta: document.querySelector("#report-meta"),
   modeLabel: document.querySelector("#mode-label"),
   executiveSummary: document.querySelector("#executive-summary"),
@@ -52,6 +54,7 @@ const storageKeys = {
   apiKey: "benefits-demo-api-key",
   modelName: "benefits-demo-model",
   input: "benefits-demo-input",
+  mode: "benefits-demo-mode",
 };
 
 function loadState() {
@@ -59,6 +62,7 @@ function loadState() {
   els.apiKey.value = localStorage.getItem(storageKeys.apiKey) || "";
   els.modelName.value = localStorage.getItem(storageKeys.modelName) || "";
   els.input.value = localStorage.getItem(storageKeys.input) || sampleBrief;
+  setMode(localStorage.getItem(storageKeys.mode) || "client");
 }
 
 function saveState() {
@@ -66,6 +70,7 @@ function saveState() {
   localStorage.setItem(storageKeys.apiKey, els.apiKey.value);
   localStorage.setItem(storageKeys.modelName, els.modelName.value);
   localStorage.setItem(storageKeys.input, els.input.value);
+  localStorage.setItem(storageKeys.mode, currentMode);
 }
 
 function scoreFrom(text, patterns) {
@@ -152,12 +157,16 @@ function render(results) {
   els.vendor.textContent = results.vendorText;
   els.compliance.textContent = results.complianceText;
   els.scale.textContent = results.scaleText;
-  els.reportMeta.textContent = `${els.provider.value === "local" ? "Local analysis" : `${els.provider.value} proxy` } · ${new Date().toLocaleString()}`;
+  els.reportMeta.textContent = `${currentMode === "client" ? "Client-facing" : "Internal draft"} · ${els.provider.value === "local" ? "Local analysis" : `${els.provider.value} proxy`} · ${new Date().toLocaleString()}`;
   els.modeLabel.textContent = els.provider.value === "local" || !els.apiKey.value.trim() ? "Local demo" : `${els.provider.value} proxy`;
   els.executiveSummary.textContent = results.executiveSummary || buildExecutiveSummary(results);
   els.nextStepsList.innerHTML = (results.nextSteps || buildNextSteps(results))
     .map((step) => `<li>${escapeHtml(step)}</li>`)
     .join("");
+  document.body.dataset.mode = currentMode;
+  els.input.placeholder = currentMode === "client"
+    ? "Paste a benefits brief, job spec, or policy note"
+    : "Paste the internal working brief with supplier, renewal, and country detail";
 }
 
 function runAnalysis() {
@@ -182,41 +191,48 @@ function runAnalysis() {
   })
     .then((response) => response.json())
     .then((payload) => {
-      const raw = payload.raw || {};
-      const text = extractProxyText(payload.provider, raw);
+      const text = payload.normalized ? normalizePayload(payload.normalized) : null;
       if (text) {
-        render(enrichResults(text));
+        render(enrichResults(applyMode(text, currentMode)));
         els.statusPill.textContent = "Proxy run complete";
         return;
       }
       els.statusPill.textContent = "Proxy fallback";
-      render(enrichResults(analyze(input)));
+      render(enrichResults(applyMode(analyze(input), currentMode)));
     })
     .catch(() => {
       els.statusPill.textContent = "Local fallback";
-      render(enrichResults(analyze(input)));
+      render(enrichResults(applyMode(analyze(input), currentMode)));
     });
 }
 
-function extractProxyText(provider, raw) {
-  const read = (value) => (typeof value === "string" ? value : "");
-  if (provider === "openai") {
-    const text = raw.output_text || raw.output?.[0]?.content?.[0]?.text;
-    return text ? parseStructuredText(text) : null;
+let currentMode = "client";
+
+function setMode(mode) {
+  currentMode = mode === "internal" ? "internal" : "client";
+  els.modeClient.classList.toggle("is-active", currentMode === "client");
+  els.modeInternal.classList.toggle("is-active", currentMode === "internal");
+}
+
+function applyMode(results, mode) {
+  if (mode === "internal") {
+    return {
+      ...results,
+      executiveSummary: `${results.executiveSummary || buildExecutiveSummary(results)} Internal draft: pressure-test assumptions, supplier detail, and implementation risk before sharing outside the team.`,
+      nextSteps: [
+        "Stress-test the renewal calendar against your internal dependencies and approval gates.",
+        "Cross-check vendor SLAs, billing, and country data against the source documents.",
+        "Keep this as a working draft until legal and operations have signed off on the country list.",
+        ...(results.nextSteps || buildNextSteps(results)),
+      ],
+    };
   }
-  if (provider === "anthropic") {
-    const text = raw.content?.[0]?.text;
-    return text ? parseStructuredText(text) : null;
-  }
-  if (provider === "google") {
-    const text = raw.candidates?.[0]?.content?.parts?.[0]?.text;
-    return text ? parseStructuredText(text) : null;
-  }
-  if (provider === "xai") {
-    const text = raw.choices?.[0]?.message?.content;
-    return text ? parseStructuredText(text) : null;
-  }
-  return read(raw);
+
+  return {
+    ...results,
+    executiveSummary: results.executiveSummary || buildExecutiveSummary(results),
+    nextSteps: results.nextSteps || buildNextSteps(results),
+  };
 }
 
 function enrichResults(results) {
@@ -224,6 +240,21 @@ function enrichResults(results) {
     ...results,
     executiveSummary: results.executiveSummary || buildExecutiveSummary(results),
     nextSteps: results.nextSteps || buildNextSteps(results),
+  };
+}
+
+function normalizePayload(payload) {
+  return {
+    title: payload.title || "Benefits Brief",
+    renewalScore: Number(payload.renewalScore) || 0,
+    vendorScore: Number(payload.vendorScore) || 0,
+    complianceScore: Number(payload.complianceScore) || 0,
+    renewalText: payload.renewal || "",
+    vendorText: payload.vendor || "",
+    complianceText: payload.compliance || "",
+    scaleText: payload.scaleability || "",
+    executiveSummary: payload.executiveSummary || "",
+    nextSteps: Array.isArray(payload.nextSteps) ? payload.nextSteps : [],
   };
 }
 
@@ -256,47 +287,27 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function parseStructuredText(text) {
-  try {
-    const parsed = JSON.parse(text);
-    return {
-      renewalScore: Number(parsed.renewalScore) || 0,
-      vendorScore: Number(parsed.vendorScore) || 0,
-      complianceScore: Number(parsed.complianceScore) || 0,
-      renewalText: parsed.renewal || parsed.renewalText || "",
-      vendorText: parsed.vendor || parsed.vendorText || "",
-      complianceText: parsed.compliance || parsed.complianceText || "",
-      scaleText: parsed.scaleability || parsed.scaleText || "",
-      executiveSummary: parsed.executiveSummary || "",
-      nextSteps: Array.isArray(parsed.nextSteps) ? parsed.nextSteps : [],
-    };
-  } catch {
-    return null;
-  }
-}
-
 function exportReport() {
-  const results = enrichResults(analyze(els.input.value.trim()));
-  const report = toTextReport(results);
-
-  const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+  const results = enrichResults(applyMode(analyze(els.input.value.trim()), currentMode));
+  const report = toHtmlReport(results);
+  const blob = new Blob([report], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "benefits-specialist-report.txt";
+  link.download = "benefits-specialist-report.html";
   link.click();
   URL.revokeObjectURL(url);
 }
 
 async function copyReport() {
-  const results = enrichResults(analyze(els.input.value.trim()));
+  const results = enrichResults(applyMode(analyze(els.input.value.trim()), currentMode));
   const report = toTextReport(results);
   await navigator.clipboard.writeText(report);
   els.statusPill.textContent = "Summary copied";
 }
 
 function shareReport() {
-  const results = enrichResults(analyze(els.input.value.trim()));
+  const results = enrichResults(applyMode(analyze(els.input.value.trim()), currentMode));
   const text = toTextReport(results);
   if (navigator.share) {
     navigator.share({
@@ -313,6 +324,8 @@ function shareReport() {
 
 function toTextReport(results) {
   return `Benefits Specialist Executive Report
+
+Mode: ${currentMode === "client" ? "Client-facing" : "Internal draft"}
 
 Executive summary
 ${results.executiveSummary}
@@ -334,6 +347,77 @@ ${results.nextSteps.map((step, index) => `${index + 1}. ${step}`).join("\n")}
 `;
 }
 
+function toHtmlReport(results) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Benefits Specialist Executive Report</title>
+  <style>
+    body { margin: 0; padding: 40px; font-family: Arial, sans-serif; color: #10202f; background: #f4f5f7; }
+    .page { max-width: 900px; margin: 0 auto; background: #fff; padding: 36px; border-radius: 22px; box-shadow: 0 20px 60px rgba(0,0,0,.08); }
+    .kicker { text-transform: uppercase; letter-spacing: .18em; color: #2b7a69; font-weight: 700; font-size: 12px; }
+    h1 { margin: 10px 0 16px; font-size: 40px; line-height: 1; }
+    h2 { margin: 28px 0 10px; font-size: 20px; }
+    p, li { line-height: 1.7; font-size: 15px; }
+    .meta { display: flex; gap: 14px; flex-wrap: wrap; color: #5b6570; font-size: 13px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 22px 0; }
+    .metric { padding: 16px; border: 1px solid #d7dde4; border-radius: 16px; background: #fafbfc; }
+    .metric strong { display: block; font-size: 28px; margin-bottom: 6px; }
+    .section { margin-top: 22px; padding-top: 22px; border-top: 1px solid #e5e8ec; }
+    ol { padding-left: 20px; }
+    .footer { margin-top: 34px; color: #6b7280; font-size: 12px; }
+    @page { margin: 18mm; }
+    @media print { body { background: #fff; padding: 0; } .page { box-shadow: none; border-radius: 0; padding: 0; } }
+  </style>
+</head>
+<body>
+  <article class="page">
+    <div class="kicker">Client-ready report</div>
+    <h1>Benefits Specialist Executive Report</h1>
+    <div class="meta">
+      <span>Mode: ${currentMode === "client" ? "Client-facing" : "Internal draft"}</span>
+      <span>Provider: ${escapeHtml(els.provider.value)}</span>
+      <span>Generated: ${escapeHtml(new Date().toLocaleString())}</span>
+    </div>
+    <div class="grid">
+      <div class="metric"><strong>${results.renewalScore}%</strong><span>Renewal risk</span></div>
+      <div class="metric"><strong>${results.vendorScore}%</strong><span>Vendor audit</span></div>
+      <div class="metric"><strong>${results.complianceScore}%</strong><span>Compliance coverage</span></div>
+    </div>
+    <div class="section">
+      <h2>Executive summary</h2>
+      <p>${escapeHtml(results.executiveSummary)}</p>
+    </div>
+    <div class="section">
+      <h2>Renewal logic</h2>
+      <p>${escapeHtml(results.renewalText)}</p>
+    </div>
+    <div class="section">
+      <h2>Vendor audit</h2>
+      <p>${escapeHtml(results.vendorText)}</p>
+    </div>
+    <div class="section">
+      <h2>Statutory summary</h2>
+      <p>${escapeHtml(results.complianceText)}</p>
+    </div>
+    <div class="section">
+      <h2>Scaleability logic</h2>
+      <p>${escapeHtml(results.scaleText)}</p>
+    </div>
+    <div class="section">
+      <h2>Next steps</h2>
+      <ol>
+        ${results.nextSteps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}
+      </ol>
+    </div>
+    <div class="footer">Built with Codex from OpenAI.</div>
+  </article>
+</body>
+</html>`;
+}
+
 els.sample.addEventListener("click", () => {
   els.input.value = sampleBrief;
   els.fileName.textContent = "Sample brief loaded";
@@ -349,6 +433,16 @@ els.copyReport.addEventListener("click", () => {
 });
 els.shareReport.addEventListener("click", () => {
   shareReport();
+});
+els.modeClient.addEventListener("click", () => {
+  setMode("client");
+  saveState();
+  runAnalysis();
+});
+els.modeInternal.addEventListener("click", () => {
+  setMode("internal");
+  saveState();
+  runAnalysis();
 });
 
 els.fileInput.addEventListener("change", async () => {
@@ -366,4 +460,4 @@ els.fileInput.addEventListener("change", async () => {
 });
 
 loadState();
-render(analyze(els.input.value.trim()));
+render(enrichResults(applyMode(analyze(els.input.value.trim()), currentMode)));

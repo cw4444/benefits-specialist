@@ -30,7 +30,6 @@ No build step is required.
 
 The app includes optional fields for:
 
-- Provider: local, OpenAI, Anthropic, or Google
 - Provider: local, OpenAI, Anthropic, Google, or xAI
 - API key
 - Model name
